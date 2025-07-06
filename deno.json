@@ -6,7 +6,7 @@
     ]
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./index.ts"
   },
   "imports": {
     "@cosense/std": "jsr:@cosense/std@0.29",

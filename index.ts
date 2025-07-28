@@ -1,14 +1,20 @@
 import { patch } from "@cosense/std/websocket";
-import type { FoundPage, Page, SearchResult } from "@cosense/types/rest";
+import type { FoundPage, Page } from "@cosense/types/rest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  ErrorCode,
+  ListResourcesRequestSchema,
+  McpError,
+  ReadResourceRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { unwrapErr } from "option-t/plain_result";
 import z from "zod";
 import { getConfig } from "./config.ts";
-import { getPage, listPages, searchForPages } from "./cosense.ts";
-import { PageResource, Resources } from "./resource.ts";
 import denoJson from "./deno.json" with { type: "json" };
-
+import { get as getPage } from "@cosense/std/unstable-api/pages/project/title";
+import { get as listPages } from "@cosense/std/unstable-api/pages/project";
+import { get as searchForPages } from "@cosense/std/unstable-api/pages/project/search/query";
 function foundPageToText({ title, words, lines }: FoundPage): string {
   return [
     `Page title: ${title}`,
@@ -16,15 +22,6 @@ function foundPageToText({ title, words, lines }: FoundPage): string {
     `Surrounding lines:`,
     lines.join("\n"),
   ].join("\n");
-}
-
-function searchResultToText({ query, count, pages }: SearchResult): string {
-  const headerText = [
-    `Search result for "${query}":`,
-    `Found ${count} pages.`,
-  ].join("\n");
-  const pageText = pages.map((page) => foundPageToText(page)).join("\n\n");
-  return [headerText, "", pageText].join("\n");
 }
 
 function pageToText(page: Page): string {
@@ -45,35 +42,89 @@ ${page.relatedPages.projectLinks1hop.map((page) => page.title).join("\n")}
   return text;
 }
 
+const makeCosenseURI = (project: string, title: string): string =>
+  `cosense://${project}/${title}`;
+const parseCosenseURI = (
+  uri: string,
+): { project: string; title: string } | undefined => {
+  const match = uri.match(/^cosense:\/\/([^\/]+)\/(.+)$/);
+  if (!match) return undefined;
+  const [, project, title] = match;
+  return { project, title };
+};
+
 if (import.meta.main) {
   const config = getConfig();
-
-  const pageResources = new Resources<PageResource>();
-  const pageList = await listPages(config.projectName, {
-    sid: config.cosenseSid,
-  });
-  pageList.pages.forEach((page) => {
-    pageResources.add(new PageResource(page));
-  });
-  console.error(`Found ${pageResources.count} resources`);
 
   const server = new McpServer({
     name: "cosense-mcp-server",
     version: denoJson.version,
   });
 
-  server.registerResource(
-    "page",
-    "cosense:///{title}",
-    {
-      title: "Cosense page resource",
-      description: "Cosense page resource",
-      mimeType: "text/plain",
-      list: () => pageResources.getAll().map((r) => ({ ...r })),
+  // 低レベルAPIを使用してリソース機能を手動で設定
+  server.server.registerCapabilities({
+    resources: {
+      listChanged: true,
     },
-    (uri) => {
-      const pageResource = pageResources.findByUri(uri.href);
-      return pageResource.read(config.projectName, { sid: config.cosenseSid });
+  });
+
+  server.server.setRequestHandler(
+    ListResourcesRequestSchema,
+    async (request) => {
+      const cursor = request.params?.cursor;
+      let skip = 0;
+      if (cursor) {
+        skip = parseInt(cursor);
+        if (isNaN(skip)) {
+          throw new Error(`Invalid cursor: ${cursor}`);
+        }
+      }
+      const res = await listPages(config.projectName, {
+        sid: config.cosenseSid,
+        skip,
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to list pages: ${(await res.json()).message}`);
+      }
+      const { pages, count } = await res.json();
+      return {
+        resources: pages.map((page) => ({
+          uri: makeCosenseURI(config.projectName, page.title),
+          name: page.title,
+          description: page.descriptions.join("\n"),
+          mimeType: "text/plain",
+        })),
+        nextCursor: skip + pages.length < count
+          ? `${skip + pages.length}`
+          : undefined,
+      };
+    },
+  );
+
+  server.server.setRequestHandler(
+    ReadResourceRequestSchema,
+    async (request) => {
+      const { project, title } = parseCosenseURI(request.params.uri) ?? {};
+
+      if (!project || !title) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Resource ${request.params.uri} not found`,
+        );
+      }
+
+      const res = await getPage(project, decodeURIComponent(title), {
+        sid: config.cosenseSid,
+      });
+      if (!res.ok) {
+        throw new Error(`Error: ${(await res.json()).message}`);
+      }
+      return {
+        contents: [{
+          uri: request.params.uri,
+          text: pageToText(await res.json()),
+        }],
+      };
     },
   );
 
@@ -82,29 +133,54 @@ if (import.meta.main) {
       "Get a page with the specified title from the Cosense project.",
     inputSchema: { title: z.string().describe("Title of the page") },
   }, async ({ title }) => {
-    const page = await getPage(config.projectName, title, {
+    const res = await getPage(config.projectName, title, {
       sid: config.cosenseSid,
     });
-    return { content: [{ type: "text", text: pageToText(page) }] };
+    if (!res.ok) {
+      const { message } = await res.json();
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: ${message}`,
+          },
+        ],
+      };
+    }
+    return { content: [{ type: "text", text: pageToText(await res.json()) }] };
   });
 
   server.registerTool(
     "list_pages",
     {
-      description: "List Cosense pages in the resources.",
+      description: "List latest 100 Cosense pages in the resources.",
       inputSchema: {},
     },
-    () => {
-      return Promise.resolve({
-        content: [
-          {
-            type: "text",
-            text: pageResources.getAll().map((r) => r.description).join(
-              "\n-----\n",
-            ),
-          },
-        ],
+    async () => {
+      const res = await listPages(config.projectName, {
+        sid: config.cosenseSid,
       });
+      if (!res.ok) {
+        const { message } = await res.json();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      const { pages } = await res.json();
+      return {
+        content: pages.map((page) => ({
+          type: "text",
+          text: `# Title: ${page.title}\n\n# Description\n${
+            page.descriptions.join("\n")
+          }`,
+        })),
+      };
     },
   );
 
@@ -117,17 +193,40 @@ if (import.meta.main) {
         query: z.string().describe("Search query string (space separated)"),
       },
     },
-    async (args, _context) => {
+    async (args) => {
       const { query } = args;
-      const searchResult = await searchForPages(query, config.projectName, {
+      const res = await searchForPages(config.projectName, query, {
         sid: config.cosenseSid,
       });
+      if (!res.ok) {
+        const { message } = await res.json();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      const searchResult = await res.json();
+
+      const headerText = [
+        `Search result for "${searchResult.query}":`,
+        `Found ${searchResult.count} pages.`,
+      ].join("\n");
+
       return {
         content: [
           {
             type: "text",
-            text: searchResultToText(searchResult),
+            text: headerText,
           },
+          ...searchResult.pages.map((page) => ({
+            type: "text" as const,
+            text: foundPageToText(page),
+          })),
         ],
       };
     },

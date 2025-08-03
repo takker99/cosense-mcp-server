@@ -152,6 +152,7 @@ if (import.meta.main) {
             text: `Error: ${message}`,
           },
         ],
+          isError: true,
       };
     }
     return { content: [{ type: "text", text: pageToText(await res.json()) }] };

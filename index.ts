@@ -1,4 +1,5 @@
 import { patch } from "@cosense/std/websocket";
+import { listProjects } from "@cosense/std/rest";
 import type { FoundPage, Page } from "@cosense/types/rest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -8,13 +9,15 @@ import {
   McpError,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { unwrapErr } from "option-t/plain_result";
+import { isErr, unwrapErr } from "option-t/plain_result";
 import z from "zod";
 import { getConfig } from "./config.ts";
 import denoJson from "./deno.json" with { type: "json" };
 import { get as getPage } from "@cosense/std/unstable-api/pages/project/title";
 import { get as listPages } from "@cosense/std/unstable-api/pages/project";
 import { get as searchForPages } from "@cosense/std/unstable-api/pages/project/search/query";
+import { unwrapOk } from "option-t/plain_result/result";
+import { lightFormat } from "date-fns/lightFormat";
 function foundPageToText({ title, words, lines }: FoundPage): string {
   return [
     `Page title: ${title}`,
@@ -130,7 +133,7 @@ if (import.meta.main) {
 
   server.registerTool("get_page", {
     description:
-      "Get a page with the specified title from the Cosense project. This includes not only the page content but also related pages.",
+      "Get a page with the specified title from the Cosense project.\nThis includes not only the page content but also related pages.",
     inputSchema: {
       project: z.string().default(config.projectName).describe(
         "Cosense project name",
@@ -152,10 +155,36 @@ if (import.meta.main) {
             text: `Error: ${message}`,
           },
         ],
-          isError: true,
+        isError: true,
       };
     }
     return { content: [{ type: "text", text: pageToText(await res.json()) }] };
+  });
+
+  server.registerTool("list_project", {
+    description: "List all Cosense projects you are a member of.",
+  }, async () => {
+    const res = await listProjects([], { sid: config.cosenseSid });
+
+    if (isErr(res)) {
+      const { name, message } = unwrapErr(res);
+      return {
+        content: [{ type: "text", text: `${name}: ${message}` }],
+        isError: true,
+      };
+    }
+    const { projects } = unwrapOk(res);
+    return {
+      content: projects.map((project) => ({
+        type: "text",
+        text:
+          `Name: ${project.name}\nDisplay name: ${project.displayName}\nId: ${project.id}\nLast updated: ${
+            lightFormat(new Date(project.updated * 1000), "yyyy-MM-dd HH:mm:ss")
+          }\n${project.publicVisible ? "Public" : "Private"} project\nYou are${
+            project.isMember ? "" : "n't"
+          } a member of this project.`,
+      })),
+    };
   });
 
   server.registerTool(

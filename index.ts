@@ -18,6 +18,7 @@ import { get as listPages } from "@cosense/std/unstable-api/pages/project";
 import { get as searchForPages } from "@cosense/std/unstable-api/pages/project/search/query";
 import { unwrapOk } from "option-t/plain_result/result";
 import { lightFormat } from "date-fns/lightFormat";
+
 function foundPageToText({ title, words, lines }: FoundPage): string {
   return [
     `Page title: ${title}`,
@@ -196,6 +197,46 @@ if (import.meta.main) {
           "Cosense project name",
         ),
       },
+      outputSchema: {
+        error: z.object({
+          name: z.string().describe("Error name"),
+          message: z.string().describe("Error message"),
+        }).optional(),
+        pages: z.array(
+          z.object({
+            id: z.string().describe("Cosense page ID"),
+            title: z.string().describe("Title of the page"),
+            image: z.union([z.string(), z.null()]).describe(
+              "Thumbnail URL of the page, if available",
+            ),
+            descriptions: z.array(z.string()).describe(
+              "The less than 6 head lines of the page",
+            ),
+            pin: z.number().describe("Pin at the top page if it is not 0"),
+            user: z.object({
+              id: z.string().describe("User ID of the page creator"),
+            }),
+            lastUpdateUser: z.object({
+              id: z.string().describe("User ID of the last updater"),
+            }),
+            created: z.number().describe("Creation timestamp of the page"),
+            updated: z.number().describe("Last updated timestamp of the page"),
+            accessed: z.number().describe(
+              "Last accessed timestamp of the page",
+            ),
+            views: z.number().describe("Number of views of the page"),
+            linked: z.number().describe("Number of linked pages"),
+            linesCount: z.number().describe("Number of lines in the page"),
+            charsCount: z.number().describe(
+              "Number of characters in the page",
+            ),
+            helpfeels: z.array(z.string()).describe(
+              "The list of helpfeel notations in the page",
+            ),
+          }),
+        ).optional(),
+        isError: z.boolean(),
+      },
     },
     async ({ project }) => {
       const projectName = project;
@@ -203,25 +244,22 @@ if (import.meta.main) {
         sid: config.cosenseSid,
       });
       if (!res.ok) {
-        const { message } = await res.json();
+        const error = await res.json();
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error: ${message}`,
-            },
-          ],
-          isError: true,
+          content: [{ type: "text", text: JSON.stringify(error, null, 2) }],
+          structuredContent: {
+            error,
+            isError: true,
+          },
         };
       }
       const { pages } = await res.json();
       return {
-        content: pages.map((page) => ({
-          type: "text",
-          text: `# Title: ${page.title}\n\n# Description\n${
-            page.descriptions.join("\n")
-          }`,
-        })),
+        content: [{ type: "text", text: JSON.stringify(pages, null, 2) }],
+        structuredContent: {
+          pages,
+          isError: false,
+        },
       };
     },
   );

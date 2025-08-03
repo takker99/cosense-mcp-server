@@ -259,7 +259,7 @@ if (import.meta.main) {
       const searchResult = await res.json();
 
       const headerText = [
-        `Search result for "${searchResult.query}":`,
+        `Search result for "${query}":`,
         `Found ${searchResult.count} pages.`,
       ].join("\n");
 

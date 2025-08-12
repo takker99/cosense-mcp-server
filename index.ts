@@ -11,7 +11,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { isErr, unwrapErr } from "option-t/plain_result";
 import z from "zod";
-import { getConfig } from "./config.ts";
+import { getConfig, isProjectWritable } from "./config.ts";
 import denoJson from "./deno.json" with { type: "json" };
 import { get as getPage } from "@cosense/std/unstable-api/pages/project/title";
 import { get as listPages } from "@cosense/std/unstable-api/pages/project";
@@ -371,38 +371,36 @@ if (import.meta.main) {
     "write_page",
     {
       description:
-        "Rewrite the entire content of a Cosense page with new content. This tool supports LLM sampling for flexible page editing with validation and retry capabilities.",
+        "Rewrite the entire content of a Cosense page using LLM sampling. The tool will get the current page content and ask the LLM to generate updated content based on your instructions.",
       inputSchema: {
         project: z.string().default(config.projectName).describe(
           "Cosense project name. Must be in the list of editable projects.",
         ),
         pageTitle: z.string().describe("Title of the page to rewrite"),
-        newContent: z.string().describe(
-          "New content for the page. Use \\n for line breaks.",
+        instructions: z.string().describe(
+          "Instructions for how to modify the page content. Be specific about what changes you want to make.",
         ),
         allowTitleChange: z.boolean().default(false).describe(
           "Whether to allow changing the page title. Default is false for safety.",
         ),
-        retryLimit: z.number().default(config.defaultRetryLimit).describe(
-          `Maximum number of retry attempts if validation fails. Default is ${config.defaultRetryLimit}.`,
+        retryLimit: z.number().default(3).describe(
+          "Maximum number of retry attempts if validation fails. Default is 3.",
         ),
       },
     },
-    async (args, _context) => {
-      const { project, pageTitle, newContent, allowTitleChange, retryLimit } =
+    async (args, context) => {
+      const { project, pageTitle, instructions, allowTitleChange, retryLimit } =
         args;
       const projectName = project;
 
-      // Validate that the project is editable
-      if (!config.editableProjects.includes(projectName)) {
+      // Validate that the project is writable using the new regex-aware function
+      if (!isProjectWritable(projectName, config)) {
         return {
           content: [
             {
               type: "text",
               text:
-                `Error: Project '${projectName}' is not in the list of editable projects. Editable projects: ${
-                  config.editableProjects.join(", ")
-                }`,
+                `Error: Project '${projectName}' is not writable. Check COSENSE_EDITABLE_PROJECTS and COSENSE_DENY_PROJECTS configuration.`,
             },
           ],
           isError: true,
@@ -422,93 +420,164 @@ if (import.meta.main) {
         };
       }
 
-      // Split new content into lines
-      const newLines = newContent.split("\n");
+      try {
+        // First, get the current page content
+        const currentPageResult = await getPage(
+          projectName,
+          pageTitle,
+          { sid: config.cosenseSid },
+        );
 
-      // Check if title change is attempted but not allowed
-      if (
-        !allowTitleChange && newLines.length > 0 && newLines[0] !== pageTitle
-      ) {
-        return {
-          content: [
+        if (isErr(currentPageResult)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error: Could not retrieve current page content: ${unwrapErr(currentPageResult)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const currentPage = unwrapOk(currentPageResult);
+        const currentContent = currentPage.lines.map((line) => line.text).join("\n");
+
+        // Use LLM sampling to generate new content
+        const samplingPrompt = `You are helping to rewrite a Cosense page. Here is the current content of the page titled "${pageTitle}":
+
+---
+${currentContent}
+---
+
+Instructions: ${instructions}
+
+Please provide the complete updated content for this page. ${allowTitleChange ? "You may change the title if needed." : "Keep the original title as the first line."} Return only the updated page content, nothing else.`;
+
+        const response = await server.server.createMessage({
+          messages: [
             {
-              type: "text",
-              text:
-                `Error: Title change detected but not allowed. Current title: '${pageTitle}', New first line: '${
-                  newLines[0]
-                }'. Set allowTitleChange to true if you want to change the title.`,
+              role: "user",
+              content: {
+                type: "text",
+                text: samplingPrompt,
+              },
             },
           ],
-          isError: true,
-        };
-      }
+          maxTokens: 4000,
+        });
 
-      let lastError: string | null = null;
-      let attempts = 0;
-      const maxAttempts = retryLimit + 1;
+        if (response.content.type !== "text") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: LLM sampling did not return text content.",
+              },
+            ],
+            isError: true,
+          };
+        }
 
-      while (attempts < maxAttempts) {
-        attempts++;
+        const newContent = response.content.text;
+        const newLines = newContent.split("\n");
 
-        try {
-          const result = await patch(
-            projectName,
-            pageTitle,
-            (_lines) => {
-              // Return the new content as an array of lines
-              return newLines;
-            },
-            { sid: config.cosenseSid },
-          );
+        // Check if title change is attempted but not allowed
+        if (
+          !allowTitleChange && newLines.length > 0 && newLines[0] !== pageTitle
+        ) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Error: Title change detected but not allowed. Current title: '${pageTitle}', New first line: '${
+                    newLines[0]
+                  }'. Set allowTitleChange to true if you want to change the title.`,
+              },
+            ],
+            isError: true,
+          };
+        }
 
-          if (result.ok) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    `Successfully rewrote page '${pageTitle}' in project '${projectName}' (attempt ${attempts}/${maxAttempts}).`,
-                },
-              ],
-            };
-          } else {
-            const error = unwrapErr(result);
-            lastError = error && typeof error === "object" && "message" in error
-              ? String(error.message)
-              : String(error);
+        let lastError: string | null = null;
+        let attempts = 0;
+        const maxAttempts = retryLimit + 1;
+
+        while (attempts < maxAttempts) {
+          attempts++;
+
+          try {
+            const result = await patch(
+              projectName,
+              pageTitle,
+              (_lines) => {
+                // Return the new content as an array of lines
+                return newLines;
+              },
+              { sid: config.cosenseSid },
+            );
+
+            if (result.ok) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      `Successfully rewrote page '${pageTitle}' in project '${projectName}' using LLM sampling (attempt ${attempts}/${maxAttempts}).`,
+                  },
+                ],
+              };
+            } else {
+              const error = unwrapErr(result);
+              lastError = error && typeof error === "object" && "message" in error
+                ? String(error.message)
+                : String(error);
+              if (attempts < maxAttempts) {
+                console.log(
+                  `Write attempt ${attempts} failed, retrying...`,
+                  lastError,
+                );
+                continue;
+              }
+            }
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
             if (attempts < maxAttempts) {
               console.log(
-                `Write attempt ${attempts} failed, retrying...`,
+                `Write attempt ${attempts} failed with exception, retrying...`,
                 lastError,
               );
               continue;
             }
           }
-        } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error);
-          if (attempts < maxAttempts) {
-            console.log(
-              `Write attempt ${attempts} failed with exception, retrying...`,
-              lastError,
-            );
-            continue;
-          }
         }
-      }
 
-      // All retries exhausted
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `Error: Failed to rewrite page after ${maxAttempts} attempts. Last error: ${
-                lastError || "Unknown error"
-              }`,
-          },
-        ],
-        isError: true,
-      };
+        // All retries exhausted
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Error: Failed to rewrite page after ${maxAttempts} attempts. Last error: ${
+                  lastError || "Unknown error"
+                }`,
+            },
+          ],
+          isError: true,
+        };
+
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
     },
   );
 

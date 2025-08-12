@@ -367,6 +367,151 @@ if (import.meta.main) {
     },
   );
 
+  server.registerTool(
+    "write_page",
+    {
+      description:
+        "Rewrite the entire content of a Cosense page with new content. This tool supports LLM sampling for flexible page editing with validation and retry capabilities.",
+      inputSchema: {
+        project: z.string().default(config.projectName).describe(
+          "Cosense project name. Must be in the list of editable projects.",
+        ),
+        pageTitle: z.string().describe("Title of the page to rewrite"),
+        newContent: z.string().describe(
+          "New content for the page. Use \\n for line breaks.",
+        ),
+        allowTitleChange: z.boolean().default(false).describe(
+          "Whether to allow changing the page title. Default is false for safety.",
+        ),
+        retryLimit: z.number().default(config.defaultRetryLimit).describe(
+          `Maximum number of retry attempts if validation fails. Default is ${config.defaultRetryLimit}.`,
+        ),
+      },
+    },
+    async (args, _context) => {
+      const { project, pageTitle, newContent, allowTitleChange, retryLimit } =
+        args;
+      const projectName = project;
+
+      // Validate that the project is editable
+      if (!config.editableProjects.includes(projectName)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Error: Project '${projectName}' is not in the list of editable projects. Editable projects: ${
+                  config.editableProjects.join(", ")
+                }`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Validate retry limit
+      if (retryLimit < 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Retry limit must be non-negative.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Split new content into lines
+      const newLines = newContent.split("\n");
+
+      // Check if title change is attempted but not allowed
+      if (
+        !allowTitleChange && newLines.length > 0 && newLines[0] !== pageTitle
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Error: Title change detected but not allowed. Current title: '${pageTitle}', New first line: '${
+                  newLines[0]
+                }'. Set allowTitleChange to true if you want to change the title.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      let lastError: string | null = null;
+      let attempts = 0;
+      const maxAttempts = retryLimit + 1;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+
+        try {
+          const result = await patch(
+            projectName,
+            pageTitle,
+            (_lines) => {
+              // Return the new content as an array of lines
+              return newLines;
+            },
+            { sid: config.cosenseSid },
+          );
+
+          if (result.ok) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Successfully rewrote page '${pageTitle}' in project '${projectName}' (attempt ${attempts}/${maxAttempts}).`,
+                },
+              ],
+            };
+          } else {
+            const error = unwrapErr(result);
+            lastError = error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error);
+            if (attempts < maxAttempts) {
+              console.log(
+                `Write attempt ${attempts} failed, retrying...`,
+                lastError,
+              );
+              continue;
+            }
+          }
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+          if (attempts < maxAttempts) {
+            console.log(
+              `Write attempt ${attempts} failed with exception, retrying...`,
+              lastError,
+            );
+            continue;
+          }
+        }
+      }
+
+      // All retries exhausted
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Error: Failed to rewrite page after ${maxAttempts} attempts. Last error: ${
+                lastError || "Unknown error"
+              }`,
+          },
+        ],
+        isError: true,
+      };
+    },
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

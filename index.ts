@@ -408,7 +408,7 @@ if (import.meta.main) {
         "Apply a unified diff patch to a Cosense page. The patch should be in unified diff format (e.g., output from diff -u). The tool validates the patch, applies it to the current page content, and handles conflicts.",
       inputSchema: {
         project: z.string().default(config.projectName).describe(
-          "Cosense project name. Must be in the list of editable projects.",
+          `Cosense project name. Must match editable project patterns: [${config.editableProjects.join(", ")}]${config.denyProjects.length > 0 ? ` and not match deny patterns: [${config.denyProjects.join(", ")}]` : ""}.`,
         ),
         pageTitle: z.string().describe("Title of the page to modify"),
         patch: z.string().describe(
@@ -417,8 +417,8 @@ if (import.meta.main) {
         allowTitleChange: z.boolean().default(false).describe(
           "Whether to allow changing the page title. Default is false for safety.",
         ),
-        retryLimit: z.number().default(3).describe(
-          "Maximum number of retry attempts if validation fails. Default is 3.",
+        retryLimit: z.number().positive().default(3).describe(
+          "Maximum number of retry attempts if validation fails. Must be a positive number. Default is 3.",
         ),
       },
     },
@@ -446,51 +446,11 @@ if (import.meta.main) {
         };
       }
 
-      // Validate retry limit
-      if (retryLimit < 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Retry limit must be non-negative.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
       try {
-        // First, get the current page content
-        const currentPageResult = await getPage(
-          projectName,
-          pageTitle,
-          { sid: config.cosenseSid },
-        );
-
-        if (!currentPageResult.ok) {
-          const { message } = await currentPageResult.json();
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `Error: Could not retrieve current page content: ${message}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const currentPage = await currentPageResult.json();
-        const currentContent = currentPage.lines.map((line: { text: string }) =>
-          line.text
-        ).join("\n");
-
-        // Parse and apply the patch
-        let newContent: string;
+        // First validate the patch format before doing any fetches
+        let parsedPatch;
         try {
-          // Parse the unified diff patch
-          const parsedPatch = Diff.parsePatch(patchString);
+          parsedPatch = Diff.parsePatch(patchString);
 
           if (parsedPatch.length === 0) {
             return {
@@ -504,66 +464,14 @@ if (import.meta.main) {
               isError: true,
             };
           }
-
-          // Apply the patch to the current content
-          const applyResult = Diff.applyPatch(currentContent, parsedPatch[0]);
-
-          if (applyResult === false) {
-            // Try to create a three-way merge if patch doesn't apply cleanly
-            const patchLines = patchString.split("\n");
-            let conflictInfo =
-              "Patch could not be applied cleanly. Conflicts detected:\n\n";
-
-            // Extract context from the patch for better error reporting
-            for (const line of patchLines) {
-              if (line.startsWith("@@")) {
-                conflictInfo += `Location: ${line}\n`;
-              } else if (line.startsWith("-") || line.startsWith("+")) {
-                conflictInfo += `${line}\n`;
-              }
-            }
-
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    `Error: ${conflictInfo}\n\nThe current page content may have changed since the patch was created. Please get the current content with get_page_text and create a new patch.`,
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          newContent = applyResult;
         } catch (error) {
           return {
             content: [
               {
                 type: "text",
-                text: `Error: Failed to parse or apply patch: ${
+                text: `Error: Failed to parse patch: ${
                   error instanceof Error ? error.message : String(error)
                 }`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const newLines = newContent.split("\n");
-
-        // Check if title change is attempted but not allowed
-        if (
-          !allowTitleChange && newLines.length > 0 && newLines[0] !== pageTitle
-        ) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `Error: Title change detected but not allowed. Current title: '${pageTitle}', New first line: '${
-                    newLines[0]
-                  }'. Set allowTitleChange to true if you want to change the title.`,
               },
             ],
             isError: true,
@@ -582,6 +490,46 @@ if (import.meta.main) {
               projectName,
               pageTitle,
               (_lines) => {
+                // Apply patch to current page content
+                const currentContent = _lines.join("\n");
+                
+                // Apply the patch to the current content
+                const applyResult = Diff.applyPatch(currentContent, parsedPatch[0]);
+
+                if (applyResult === false) {
+                  // Try to create a three-way merge if patch doesn't apply cleanly
+                  const patchLines = patchString.split("\n");
+                  let conflictInfo =
+                    "Patch could not be applied cleanly. Conflicts detected:\n\n";
+
+                  // Extract context from the patch for better error reporting
+                  for (const line of patchLines) {
+                    if (line.startsWith("@@")) {
+                      conflictInfo += `Location: ${line}\n`;
+                    } else if (line.startsWith("-") || line.startsWith("+")) {
+                      conflictInfo += `${line}\n`;
+                    }
+                  }
+
+                  throw new Error(
+                    `${conflictInfo}\n\nThe current page content may have changed since the patch was created. Please get the current content with get_page_text and create a new patch.`
+                  );
+                }
+
+                const newContent = applyResult;
+                const newLines = newContent.split("\n");
+
+                // Check if title change is attempted but not allowed
+                if (
+                  !allowTitleChange && newLines.length > 0 && newLines[0] !== pageTitle
+                ) {
+                  throw new Error(
+                    `Title change detected but not allowed. Current title: '${pageTitle}', New first line: '${
+                      newLines[0]
+                    }'. Set allowTitleChange to true if you want to change the title.`
+                  );
+                }
+
                 // Return the new content as an array of lines
                 return newLines;
               },
@@ -589,15 +537,34 @@ if (import.meta.main) {
             );
 
             if (result.ok) {
-              // Generate a summary of what was changed
-              const diffSummary = Diff.createTwoFilesPatch(
-                "original",
-                "modified",
-                currentContent,
-                newContent,
-                "original content",
-                "modified content",
+              // Generate a summary of what was changed for the success message
+              // We need to get the original content for the diff summary
+              const currentPageResult = await getPage(
+                projectName,
+                pageTitle,
+                { sid: config.cosenseSid },
               );
+              
+              let diffSummary = "Patch applied successfully";
+              if (currentPageResult.ok) {
+                const currentPage = await currentPageResult.json();
+                const originalContent = currentPage.lines.map((line: { text: string }) =>
+                  line.text
+                ).join("\n");
+                
+                // Apply patch again to get the new content for diff summary
+                const newContent = Diff.applyPatch(originalContent, parsedPatch[0]);
+                if (newContent !== false) {
+                  diffSummary = Diff.createTwoFilesPatch(
+                    "original",
+                    "modified",
+                    originalContent,
+                    newContent,
+                    "original content",
+                    "modified content",
+                  );
+                }
+              }
 
               return {
                 content: [

@@ -3,25 +3,20 @@
   "specifiers": {
     "jsr:@core/iterutil@0.9": "0.9.0",
     "jsr:@core/unknownutil@4": "4.3.0",
-    "jsr:@cosense/std@0.29": "0.29.14",
-    "jsr:@cosense/types@0.10": "0.10.10",
+    "jsr:@cosense/std@~0.29.16": "0.29.16",
     "jsr:@cosense/types@~0.10.10": "0.10.10",
     "jsr:@cosense/types@~0.10.7": "0.10.10",
     "jsr:@progfay/scrapbox-parser@9": "9.2.0",
-    "jsr:@std/async@^1.0.11": "1.0.13",
+    "jsr:@std/async@^1.0.11": "1.0.14",
     "jsr:@std/encoding@1": "1.0.10",
-    "jsr:@std/http@^1.0.13": "1.0.20",
-    "jsr:@std/json@1": "1.0.2",
-    "jsr:@std/streams@^1.0.9": "1.0.10",
-    "jsr:@std/testing@^1.0.9": "1.0.15",
     "jsr:@takker/md5@0.1": "0.1.0",
-    "npm:@modelcontextprotocol/sdk@^1.17.1": "1.17.1_express@5.1.0_zod@3.25.76",
+    "npm:@modelcontextprotocol/sdk@^1.17.3": "1.17.3_express@5.1.0_zod@3.25.76",
     "npm:@types/node@*": "22.15.15",
     "npm:date-fns@^4.1.0": "4.1.0",
     "npm:option-t@51": "51.1.1",
     "npm:option-t@53": "53.0.0",
     "npm:socket.io-client@^4.7.5": "4.8.1",
-    "npm:zod@3": "3.25.76"
+    "npm:zod@^3.25.76": "3.25.76"
   },
   "jsr": {
     "@core/iterutil@0.9.0": {
@@ -30,19 +25,15 @@
     "@core/unknownutil@4.3.0": {
       "integrity": "538a3687ffa81028e91d148818047df219663d0da671d906cecd165581ae55cc"
     },
-    "@cosense/std@0.29.14": {
-      "integrity": "2a603abf14e557376c94232e4a4ffce7d8322da398d5c8a8abe0975687021354",
+    "@cosense/std@0.29.16": {
+      "integrity": "689175169afcdc42b1bb65a23d3fbc6924fa58ab1cb42bfd1b532be6f5637b2e",
       "dependencies": [
         "jsr:@core/iterutil",
         "jsr:@core/unknownutil",
-        "jsr:@cosense/types@0.10",
         "jsr:@cosense/types@~0.10.7",
         "jsr:@progfay/scrapbox-parser",
         "jsr:@std/async",
         "jsr:@std/encoding",
-        "jsr:@std/http",
-        "jsr:@std/json",
-        "jsr:@std/testing",
         "jsr:@takker/md5",
         "npm:option-t@51",
         "npm:socket.io-client"
@@ -54,34 +45,19 @@
     "@progfay/scrapbox-parser@9.2.0": {
       "integrity": "82ebb95e72dd0ea44547fd48e2bcb479fd2275fc26c4515598f742e5aaf6e0e5"
     },
-    "@std/async@1.0.13": {
-      "integrity": "1d76ca5d324aef249908f7f7fe0d39aaf53198e5420604a59ab5c035adc97c96"
+    "@std/async@1.0.14": {
+      "integrity": "62e954a418652c704d37563a3e54a37d4cf0268a9dcaeac1660cc652880b5326"
     },
     "@std/encoding@1.0.10": {
       "integrity": "8783c6384a2d13abd5e9e87a7ae0520a30e9f56aeeaa3bdf910a3eaaf5c811a1"
-    },
-    "@std/http@1.0.20": {
-      "integrity": "b5cc33fc001bccce65ed4c51815668c9891c69ccd908295997e983d8f56070a1"
-    },
-    "@std/json@1.0.2": {
-      "integrity": "d9e5497801c15fb679f55a2c01c7794ad7a5dfda4dd1bebab5e409cb5e0d34d4",
-      "dependencies": [
-        "jsr:@std/streams"
-      ]
-    },
-    "@std/streams@1.0.10": {
-      "integrity": "75c0b1431873cd0d8b3d679015220204d36d3c7420d93b60acfc379eb0dc30af"
-    },
-    "@std/testing@1.0.15": {
-      "integrity": "a490169f5ccb0f3ae9c94fbc69d2cd43603f2cffb41713a85f99bbb0e3087cbc"
     },
     "@takker/md5@0.1.0": {
       "integrity": "4c423d8247aadf7bcb1eb83c727bf28c05c21906e916517395d00aa157b6eae0"
     }
   },
   "npm": {
-    "@modelcontextprotocol/sdk@1.17.1_express@5.1.0_zod@3.25.76": {
-      "integrity": "sha512-CPle1OQehbWqd25La9Ack5B07StKIxh4+Bf19qnpZKJC1oI22Y0czZHbifjw1UoczIfKBwBDAp/dFxvHG13B5A==",
+    "@modelcontextprotocol/sdk@1.17.3_express@5.1.0_zod@3.25.76": {
+      "integrity": "sha512-JPwUKWSsbzx+DLFznf/QZ32Qa+ptfbUlHhRLrBQBAFu9iI1iYvizM4p+zhhRDceSsPutXp4z+R/HPVphlIiclg==",
       "dependencies": [
         "ajv",
         "content-type",
@@ -246,8 +222,8 @@
     "etag@1.8.1": {
       "integrity": "sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg=="
     },
-    "eventsource-parser@3.0.3": {
-      "integrity": "sha512-nVpZkTMM9rF6AQ9gPJpFsNAMt48wIzB5TQgiTLdHiuO8XEDhUgZEhqKlZWXbIzo9VmJ/HvysHqEaVeD5v9TPvA=="
+    "eventsource-parser@3.0.5": {
+      "integrity": "sha512-bSRG85ZrMdmWtm7qkF9He9TNRzc/Bm99gEJMaQoHJ9E6Kv9QBbsldh2oMj7iXmYNEAVvNgvv5vPorG6W+XtBhQ=="
     },
     "eventsource@3.0.7": {
       "integrity": "sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==",
@@ -637,12 +613,12 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@cosense/std@0.29",
+      "jsr:@cosense/std@~0.29.16",
       "jsr:@cosense/types@~0.10.10",
-      "npm:@modelcontextprotocol/sdk@^1.17.1",
+      "npm:@modelcontextprotocol/sdk@^1.17.3",
       "npm:date-fns@^4.1.0",
       "npm:option-t@53",
-      "npm:zod@3"
+      "npm:zod@^3.25.76"
     ]
   }
 }

@@ -18,6 +18,7 @@ import { get as listPages } from "@cosense/std/unstable-api/pages/project";
 import { get as searchForPages } from "@cosense/std/unstable-api/pages/project/search/query";
 import { unwrapOk } from "option-t/plain_result/result";
 import { lightFormat } from "date-fns/lightFormat";
+import * as Diff from "diff";
 
 function foundPageToText({ title, words, lines }: FoundPage): string {
   return [
@@ -160,6 +161,39 @@ if (import.meta.main) {
       };
     }
     return { content: [{ type: "text", text: pageToText(await res.json()) }] };
+  });
+
+  server.registerTool("get_page_text", {
+    description:
+      "Get only the plain text content of a Cosense page without annotations or related pages. Useful for editing purposes.",
+    inputSchema: {
+      project: z.string().default(config.projectName).describe(
+        "Cosense project name",
+      ),
+      title: z.string().describe("Title of the page"),
+    },
+  }, async ({ project, title }) => {
+    const projectName = project;
+    console.debug(`Fetching page text: ${projectName}/${title}`);
+    const res = await getPage(projectName, title, {
+      sid: config.cosenseSid,
+    });
+    if (!res.ok) {
+      const { message } = await res.json();
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: ${message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    const page = await res.json();
+    const plainText = page.lines.map((line: { text: string }) => line.text)
+      .join("\n");
+    return { content: [{ type: "text", text: plainText }] };
   });
 
   server.registerTool("list_project", {
@@ -371,14 +405,14 @@ if (import.meta.main) {
     "write_page",
     {
       description:
-        "Rewrite the entire content of a Cosense page using LLM sampling. The tool will get the current page content and ask the LLM to generate updated content based on your instructions.",
+        "Apply a unified diff patch to a Cosense page. The patch should be in unified diff format (e.g., output from diff -u). The tool validates the patch, applies it to the current page content, and handles conflicts.",
       inputSchema: {
         project: z.string().default(config.projectName).describe(
           "Cosense project name. Must be in the list of editable projects.",
         ),
-        pageTitle: z.string().describe("Title of the page to rewrite"),
-        instructions: z.string().describe(
-          "Instructions for how to modify the page content. Be specific about what changes you want to make.",
+        pageTitle: z.string().describe("Title of the page to modify"),
+        patch: z.string().describe(
+          "Unified diff patch to apply to the page content. Should be in standard unified diff format.",
         ),
         allowTitleChange: z.boolean().default(false).describe(
           "Whether to allow changing the page title. Default is false for safety.",
@@ -388,9 +422,14 @@ if (import.meta.main) {
         ),
       },
     },
-    async (args, context) => {
-      const { project, pageTitle, instructions, allowTitleChange, retryLimit } =
-        args;
+    async (args, _context) => {
+      const {
+        project,
+        pageTitle,
+        patch: patchString,
+        allowTitleChange,
+        retryLimit,
+      } = args;
       const projectName = project;
 
       // Validate that the project is writable using the new regex-aware function
@@ -428,58 +467,89 @@ if (import.meta.main) {
           { sid: config.cosenseSid },
         );
 
-        if (isErr(currentPageResult)) {
+        if (!currentPageResult.ok) {
+          const { message } = await currentPageResult.json();
           return {
             content: [
               {
                 type: "text",
-                text: `Error: Could not retrieve current page content: ${unwrapErr(currentPageResult)}`,
+                text:
+                  `Error: Could not retrieve current page content: ${message}`,
               },
             ],
             isError: true,
           };
         }
 
-        const currentPage = unwrapOk(currentPageResult);
-        const currentContent = currentPage.lines.map((line) => line.text).join("\n");
+        const currentPage = await currentPageResult.json();
+        const currentContent = currentPage.lines.map((line: { text: string }) =>
+          line.text
+        ).join("\n");
 
-        // Use LLM sampling to generate new content
-        const samplingPrompt = `You are helping to rewrite a Cosense page. Here is the current content of the page titled "${pageTitle}":
+        // Parse and apply the patch
+        let newContent: string;
+        try {
+          // Parse the unified diff patch
+          const parsedPatch = Diff.parsePatch(patchString);
 
----
-${currentContent}
----
+          if (parsedPatch.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Error: Invalid patch format. Please provide a valid unified diff patch.",
+                },
+              ],
+              isError: true,
+            };
+          }
 
-Instructions: ${instructions}
+          // Apply the patch to the current content
+          const applyResult = Diff.applyPatch(currentContent, parsedPatch[0]);
 
-Please provide the complete updated content for this page. ${allowTitleChange ? "You may change the title if needed." : "Keep the original title as the first line."} Return only the updated page content, nothing else.`;
+          if (applyResult === false) {
+            // Try to create a three-way merge if patch doesn't apply cleanly
+            const patchLines = patchString.split("\n");
+            let conflictInfo =
+              "Patch could not be applied cleanly. Conflicts detected:\n\n";
 
-        const response = await server.server.createMessage({
-          messages: [
-            {
-              role: "user",
-              content: {
-                type: "text",
-                text: samplingPrompt,
-              },
-            },
-          ],
-          maxTokens: 4000,
-        });
+            // Extract context from the patch for better error reporting
+            for (const line of patchLines) {
+              if (line.startsWith("@@")) {
+                conflictInfo += `Location: ${line}\n`;
+              } else if (line.startsWith("-") || line.startsWith("+")) {
+                conflictInfo += `${line}\n`;
+              }
+            }
 
-        if (response.content.type !== "text") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `Error: ${conflictInfo}\n\nThe current page content may have changed since the patch was created. Please get the current content with get_page_text and create a new patch.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          newContent = applyResult;
+        } catch (error) {
           return {
             content: [
               {
                 type: "text",
-                text: "Error: LLM sampling did not return text content.",
+                text: `Error: Failed to parse or apply patch: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
               },
             ],
             isError: true,
           };
         }
 
-        const newContent = response.content.text;
         const newLines = newContent.split("\n");
 
         // Check if title change is attempted but not allowed
@@ -519,20 +589,31 @@ Please provide the complete updated content for this page. ${allowTitleChange ? 
             );
 
             if (result.ok) {
+              // Generate a summary of what was changed
+              const diffSummary = Diff.createTwoFilesPatch(
+                "original",
+                "modified",
+                currentContent,
+                newContent,
+                "original content",
+                "modified content",
+              );
+
               return {
                 content: [
                   {
                     type: "text",
                     text:
-                      `Successfully rewrote page '${pageTitle}' in project '${projectName}' using LLM sampling (attempt ${attempts}/${maxAttempts}).`,
+                      `Successfully applied patch to page '${pageTitle}' in project '${projectName}' (attempt ${attempts}/${maxAttempts}).\n\nChanges applied:\n${diffSummary}`,
                   },
                 ],
               };
             } else {
               const error = unwrapErr(result);
-              lastError = error && typeof error === "object" && "message" in error
-                ? String(error.message)
-                : String(error);
+              lastError =
+                error && typeof error === "object" && "message" in error
+                  ? String(error.message)
+                  : String(error);
               if (attempts < maxAttempts) {
                 console.log(
                   `Write attempt ${attempts} failed, retrying...`,
@@ -559,20 +640,21 @@ Please provide the complete updated content for this page. ${allowTitleChange ? 
             {
               type: "text",
               text:
-                `Error: Failed to rewrite page after ${maxAttempts} attempts. Last error: ${
+                `Error: Failed to apply patch after ${maxAttempts} attempts. Last error: ${
                   lastError || "Unknown error"
                 }`,
             },
           ],
           isError: true,
         };
-
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
             },
           ],
           isError: true,

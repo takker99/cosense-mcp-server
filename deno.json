@@ -13,6 +13,7 @@
     "@cosense/types": "jsr:@cosense/types@^0.10.10",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.17.1",
     "date-fns": "npm:date-fns@^4.1.0",
+    "diff": "npm:diff@^5.2.0",
     "option-t": "npm:option-t@53",
     "zod": "npm:zod@3"
   },

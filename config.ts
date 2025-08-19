@@ -41,7 +41,10 @@ export function getConfig(): Config {
 /**
  * Check if a project is writable based on allow/deny lists that support regex patterns
  */
-export function isProjectWritable(projectName: string, config: Config): boolean {
+export function isProjectWritable(
+  projectName: string,
+  config: Config,
+): boolean {
   // First check deny list - if matches any deny pattern, project is not writable
   for (const denyPattern of config.denyProjects) {
     try {

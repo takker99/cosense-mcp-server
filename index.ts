@@ -405,20 +405,28 @@ if (import.meta.main) {
     "write_page",
     {
       description:
-        "Apply a unified diff patch to a Cosense page. The patch should be in unified diff format (e.g., output from diff -u). The tool validates the patch, applies it to the current page content, and handles conflicts.",
+        "Apply a unified diff patch to a Cosense page. The patch should be in unified diff format. The tool validates context lines, applies the patch, and provides detailed error reporting on conflicts.\n\nExample patch format:\n```\n--- original\n+++ modified\n@@ -1,3 +1,3 @@\n line1\n-old line\n+new line\n line3\n```\n\nContext lines (without + or -) must exist exactly in the current page content.",
       inputSchema: {
         project: z.string().default(config.projectName).describe(
-          `Cosense project name. Must match editable project patterns: [${config.editableProjects.join(", ")}]${config.denyProjects.length > 0 ? ` and not match deny patterns: [${config.denyProjects.join(", ")}]` : ""}.`,
+          `Cosense project name. Must match editable project patterns: [${
+            config.editableProjects.join(", ")
+          }]${
+            config.denyProjects.length > 0
+              ? ` and not match deny patterns: [${
+                config.denyProjects.join(", ")
+              }]`
+              : ""
+          }.`,
         ),
         pageTitle: z.string().describe("Title of the page to modify"),
         patch: z.string().describe(
-          "Unified diff patch to apply to the page content. Should be in standard unified diff format.",
+          "Unified diff patch to apply to the page content. Context lines (without + or -) must exist exactly in the current content.",
         ),
         allowTitleChange: z.boolean().default(false).describe(
           "Whether to allow changing the page title. Default is false for safety.",
         ),
         retryLimit: z.number().positive().default(3).describe(
-          "Maximum number of retry attempts if validation fails. Must be a positive number. Default is 3.",
+          "Maximum number of retry attempts if transient failures occur. Must be a positive number. Default is 3.",
         ),
       },
     },
@@ -447,7 +455,7 @@ if (import.meta.main) {
       }
 
       try {
-        // First validate the patch format before doing any fetches
+        // First validate the patch format and context lines before doing any fetches
         let parsedPatch;
         try {
           parsedPatch = Diff.parsePatch(patchString);
@@ -458,7 +466,20 @@ if (import.meta.main) {
                 {
                   type: "text",
                   text:
-                    "Error: Invalid patch format. Please provide a valid unified diff patch.",
+                    "Error: Invalid patch format. Please provide a valid unified diff patch.\n\nExample format:\n```\n--- original\n+++ modified\n@@ -1,3 +1,3 @@\n line1\n-old line\n+new line\n line3\n```",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          if (parsedPatch.length > 1) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Error: Multiple files in patch not supported. Please provide a patch for a single file only.",
                 },
               ],
               isError: true,
@@ -471,7 +492,7 @@ if (import.meta.main) {
                 type: "text",
                 text: `Error: Failed to parse patch: ${
                   error instanceof Error ? error.message : String(error)
-                }`,
+                }\n\nPlease ensure the patch is in valid unified diff format.`,
               },
             ],
             isError: true,
@@ -492,28 +513,55 @@ if (import.meta.main) {
               (_lines) => {
                 // Apply patch to current page content
                 const currentContent = _lines.join("\n");
-                
+
                 // Apply the patch to the current content
-                const applyResult = Diff.applyPatch(currentContent, parsedPatch[0]);
+                const applyResult = Diff.applyPatch(
+                  currentContent,
+                  parsedPatch[0],
+                );
 
                 if (applyResult === false) {
-                  // Try to create a three-way merge if patch doesn't apply cleanly
-                  const patchLines = patchString.split("\n");
-                  let conflictInfo =
-                    "Patch could not be applied cleanly. Conflicts detected:\n\n";
+                  // Enhanced error reporting with context validation
+                  const patch = parsedPatch[0];
+                  let detailedError =
+                    "Patch could not be applied cleanly. Possible causes:\n\n";
 
-                  // Extract context from the patch for better error reporting
-                  for (const line of patchLines) {
-                    if (line.startsWith("@@")) {
-                      conflictInfo += `Location: ${line}\n`;
-                    } else if (line.startsWith("-") || line.startsWith("+")) {
-                      conflictInfo += `${line}\n`;
+                  // Check for context line mismatches
+                  const currentLines = currentContent.split("\n");
+                  const contextErrors: string[] = [];
+
+                  for (const hunk of patch.hunks) {
+                    const contextLines = hunk.lines.filter((line: string) =>
+                      !line.startsWith("+") && !line.startsWith("-")
+                    );
+                    for (const contextLine of contextLines) {
+                      const cleanLine = contextLine.substring(1); // Remove the space prefix
+                      if (
+                        !currentLines.some((line: string) => line === cleanLine)
+                      ) {
+                        contextErrors.push(
+                          `  Expected context line not found: "${cleanLine}"`,
+                        );
+                      }
                     }
                   }
 
-                  throw new Error(
-                    `${conflictInfo}\n\nThe current page content may have changed since the patch was created. Please get the current content with get_page_text and create a new patch.`
-                  );
+                  if (contextErrors.length > 0) {
+                    detailedError += "Context line mismatches:\n" +
+                      contextErrors.join("\n") + "\n\n";
+                  }
+
+                  detailedError += "This usually means:\n";
+                  detailedError +=
+                    "- The page content has changed since the patch was created\n";
+                  detailedError +=
+                    "- The context lines in the patch don't match the current content exactly\n";
+                  detailedError +=
+                    "- Line endings or whitespace differences\n\n";
+                  detailedError +=
+                    "Solution: Use get_page_text to get the current content and create a new patch.";
+
+                  throw new Error(detailedError);
                 }
 
                 const newContent = applyResult;
@@ -521,12 +569,13 @@ if (import.meta.main) {
 
                 // Check if title change is attempted but not allowed
                 if (
-                  !allowTitleChange && newLines.length > 0 && newLines[0] !== pageTitle
+                  !allowTitleChange && newLines.length > 0 &&
+                  newLines[0] !== pageTitle
                 ) {
                   throw new Error(
                     `Title change detected but not allowed. Current title: '${pageTitle}', New first line: '${
                       newLines[0]
-                    }'. Set allowTitleChange to true if you want to change the title.`
+                    }'. Set allowTitleChange to true if you want to change the title.`,
                   );
                 }
 
@@ -537,33 +586,27 @@ if (import.meta.main) {
             );
 
             if (result.ok) {
-              // Generate a summary of what was changed for the success message
-              // We need to get the original content for the diff summary
-              const currentPageResult = await getPage(
-                projectName,
-                pageTitle,
-                { sid: config.cosenseSid },
-              );
-              
-              let diffSummary = "Patch applied successfully";
-              if (currentPageResult.ok) {
-                const currentPage = await currentPageResult.json();
-                const originalContent = currentPage.lines.map((line: { text: string }) =>
-                  line.text
-                ).join("\n");
-                
-                // Apply patch again to get the new content for diff summary
-                const newContent = Diff.applyPatch(originalContent, parsedPatch[0]);
-                if (newContent !== false) {
-                  diffSummary = Diff.createTwoFilesPatch(
-                    "original",
-                    "modified",
-                    originalContent,
-                    newContent,
-                    "original content",
-                    "modified content",
-                  );
+              // Generate a concise summary of what was changed
+              const patch = parsedPatch[0];
+              let changeSummary = "Successfully applied patch:\n";
+
+              // Count additions and deletions
+              let additions = 0;
+              let deletions = 0;
+
+              for (const hunk of patch.hunks) {
+                for (const line of hunk.lines) {
+                  if (line.startsWith("+")) additions++;
+                  else if (line.startsWith("-")) deletions++;
                 }
+              }
+
+              changeSummary += `- ${additions} line(s) added\n`;
+              changeSummary += `- ${deletions} line(s) removed\n`;
+
+              if (attempts > 1) {
+                changeSummary +=
+                  `\n(Applied successfully on attempt ${attempts}/${maxAttempts})`;
               }
 
               return {
@@ -571,7 +614,7 @@ if (import.meta.main) {
                   {
                     type: "text",
                     text:
-                      `Successfully applied patch to page '${pageTitle}' in project '${projectName}' (attempt ${attempts}/${maxAttempts}).\n\nChanges applied:\n${diffSummary}`,
+                      `Successfully applied patch to page '${pageTitle}' in project '${projectName}'.\n\n${changeSummary}`,
                   },
                 ],
               };

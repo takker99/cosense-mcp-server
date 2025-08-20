@@ -13,6 +13,7 @@
     "npm:@modelcontextprotocol/sdk@^1.17.3": "1.17.3_express@5.1.0_zod@3.25.76",
     "npm:@types/node@*": "22.15.15",
     "npm:date-fns@^4.1.0": "4.1.0",
+    "npm:diff@^5.2.0": "5.2.0",
     "npm:option-t@51": "51.1.1",
     "npm:option-t@53": "53.0.0",
     "npm:socket.io-client@^4.7.5": "4.8.1",
@@ -176,6 +177,9 @@
     },
     "depd@2.0.0": {
       "integrity": "sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw=="
+    },
+    "diff@5.2.0": {
+      "integrity": "sha512-uIFDxqpRZGZ6ThOk84hEfqWoHx2devRFvpTZcTHur85vImfaxUbTW9Ryh4CpCuDnToOP1CEtXKIgytHBPVff5A=="
     },
     "dunder-proto@1.0.1": {
       "integrity": "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==",
@@ -617,6 +621,7 @@
       "jsr:@cosense/types@~0.10.10",
       "npm:@modelcontextprotocol/sdk@^1.17.3",
       "npm:date-fns@^4.1.0",
+      "npm:diff@^5.2.0",
       "npm:option-t@53",
       "npm:zod@^3.25.76"
     ]
